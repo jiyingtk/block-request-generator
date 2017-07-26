@@ -579,14 +579,14 @@ void raid5_online(struct thr_info *tip){
     long long last_time = gettime();
     int req_count = 0;
 	while (!is_finish(ainfo, last_time)) {
-		if ((req_count + 1) % 1 == 0)
+		if ((req_count + 1) % 20 == 0)
 			fprintf(stderr, "has process %d request\n", req_count);
 
 		int retCode;
 		retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);
-		while (retCode == 5 && hostName != 1){
-			retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);;
-		}
+		//while (retCode == 5){
+		//	retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);;
+		//}
 		if (retCode != 5)
 			break;
 
