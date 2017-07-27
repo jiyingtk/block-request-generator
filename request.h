@@ -53,10 +53,11 @@ struct thr_info {
     char *devnm, *file_name;
     int cpu;
     int devices[MAX_DEVICE_NUM];
-    FILE *vfp;
+    FILE *vfp, *ofp;
     struct addr_info *ainfo;
     struct wait_queue *wq;
     struct buf_space *bs;
+    HashTable *ht;
     addr_type progress, safe;
 };
 
@@ -65,6 +66,9 @@ struct request_info {
     int disk_num;
     addr_type offset;
     int size;
+
+    char original_op;
+    long long start_time;
     addr_type stripe_id;
 };
 
@@ -84,6 +88,8 @@ struct iocb_pkt {
     int nbytes;
     char op;
 
+    char original_op;
+    long long start_time;
     addr_type stripe_id;
 };
 

@@ -1,1 +1,1 @@
-request.o: request.c list.h request.h address.h
+request.o: request.c list.h util/hashtable.h request.h address.h

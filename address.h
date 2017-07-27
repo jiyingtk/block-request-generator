@@ -248,6 +248,7 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
 
         blockId[0] = offsets[virDiskId[0]] * ainfo->blocks_partition + stripeId * (dataDiskNum + 1) + inBlockId;
 
+        long long start_time = gettime();
 
         int ntodo = 0, ndone;
         reqs[req_count].type = 1;
@@ -255,15 +256,23 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
         reqs[req_count].offset = blockId[0] * BLOCK;
         reqs[req_count].size = BLOCK;
         reqs[req_count].stripe_id = -1;
+        reqs[req_count].start_time = start_time;
+        reqs[req_count].original_op = 'r';
         req_count++;
         ntodo++;
 
+        hash_add(tip->ht, start_time, 1);
+
         if(op == 'w' || op == 'W') {
+            reqs[req_count - 1].original_op = 'w';
+
             reqs[req_count].type = 0;
             reqs[req_count].disk_num = diskId[0];
             reqs[req_count].offset = blockId[0] * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
 
@@ -277,6 +286,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             reqs[req_count].offset = blockId[1] * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
 
@@ -285,6 +296,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             reqs[req_count].offset = blockId[1] * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
 
@@ -304,6 +317,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             reqs[req_count].offset = blockId[2] * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
 
@@ -312,6 +327,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             reqs[req_count].offset = blockId[2] * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
 
@@ -331,6 +348,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             reqs[req_count].offset = blockId[3] * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
 
@@ -339,8 +358,12 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             reqs[req_count].offset = blockId[3] * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
+
+            hash_add(tip->ht, start_time, 8);
         }
 
         iocbs_map(tip, list, reqs, ntodo, 0);
@@ -457,21 +480,31 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
             diskId += groupId * ainfo->k;
             blockId = stripeId * (dataDiskNum + 1) + inBlockId;
 
+            long long start_time = gettime();
+
             int ntodo = 0, ndone;
             reqs[req_count].type = 1;
             reqs[req_count].disk_num = diskId;
             reqs[req_count].offset = blockId * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'r';
             req_count++;
             ntodo++;
 
+            hash_add(tip->ht, start_time, 1);
+
             if (op == 'w' || op == 'W') {
+                reqs[req_count - 1].original_op = 'w';
+
                 reqs[req_count].type = 0;
                 reqs[req_count].disk_num = diskId;
                 reqs[req_count].offset = blockId * BLOCK;
                 reqs[req_count].size = BLOCK;
                 reqs[req_count].stripe_id = -1;
+                reqs[req_count].start_time = start_time;
+                reqs[req_count].original_op = 'w';
                 req_count++;
                 ntodo++;
 
@@ -480,6 +513,8 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
                 reqs[req_count].offset = blockId * BLOCK;
                 reqs[req_count].size = BLOCK;
                 reqs[req_count].stripe_id = -1;
+                reqs[req_count].start_time = start_time;
+                reqs[req_count].original_op = 'w';
                 req_count++;
                 ntodo++;
 
@@ -488,8 +523,12 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
                 reqs[req_count].offset = blockId * BLOCK;
                 reqs[req_count].size = BLOCK;
                 reqs[req_count].stripe_id = -1;
+                reqs[req_count].start_time = start_time;
+                reqs[req_count].original_op = 'w';
                 req_count++;
                 ntodo++;
+
+                hash_add(tip->ht, start_time, 4);
             }
 
             iocbs_map(tip, list, reqs, ntodo, 0);

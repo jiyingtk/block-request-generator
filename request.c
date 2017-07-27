@@ -32,7 +32,7 @@
 #include <getopt.h>
 
 #include "list.h"
-// #include "btrecord.h"
+#include "hashtable.h"
 
 #include "request.h"
 #include "address.h"
@@ -727,6 +727,7 @@ static void tip_init(struct thr_info *tip) {
 
     tip->naios_free = naios;
 
+    tip->ht = create_hashtable(128, long long, int);
     open_devices(tip, device_fn);
     init_addr_info(tip->ainfo);
     init_queue(&tip->wq, 1024);
@@ -780,6 +781,8 @@ static void tip_release(struct thr_info *tip) {
         free(iocbp);
     }
 
+    fclose(tip->ofp);
+    hash_free(tip->ht);
     destroy_addr_info(tip->ainfo);
     close_devices(tip, device_fn);
     destroy_queue(tip->wq);
@@ -933,6 +936,24 @@ again:
             }
         }
 
+        long long start_time = iocbp->start_time;
+        int left;
+        hash_find(tip->ht, start_time, &left);
+        // fprintf(stderr, "op %c, start_time %lld, left %d\n", iocbp->op, start_time, left);
+        if (left == 1) {
+            long long cur_time = gettime();
+            fprintf(tip->ofp, "%c,%lld.%09lld,%lld.%09lld,%lld.%09lld\n", 
+                iocbp->original_op,
+                du64_to_sec(start_time), du64_to_nsec(start_time),
+                du64_to_sec(cur_time), du64_to_nsec(cur_time),
+                du64_to_sec(cur_time - start_time), du64_to_nsec(cur_time - start_time));
+
+            hash_del(tip->ht, start_time);
+        }
+        else {
+            hash_add(tip->ht, start_time, left - 1);
+        }
+
         pthread_mutex_lock(&tip->mutex);
         list_move_tail(&iocbp->head, &tip->free_iocbs);
         tip->naios_free++;
@@ -1069,6 +1090,8 @@ int iocbs_map(struct thr_info *tip, struct iocb **list,
 
         iocbp->op = rw ? 'R' : 'W';
         iocbp->stripe_id = pkt->stripe_id;
+        iocbp->start_time = pkt->start_time;
+        iocbp->original_op = pkt->original_op;
 
         list_move_tail(&iocbp->head, &tip->used_iocbs);
         list[i] = &iocbp->iocb;
@@ -1137,8 +1160,8 @@ static void *replay_sub(void *arg) {
  * Does rudimentary parameter verification as well.
  */
 static void handle_args(struct thr_info *tip, int argc, char *argv[]) {
-    if (argc != 9) {
-        fprintf(stderr, "%s: method v k chunk_size capacity running_time devices_file trace_file\n", argv[0]);
+    if (argc != 10) {
+        fprintf(stderr, "%s: method v k chunk_size capacity running_time devices_file trace_file output_file\n", argv[0]);
         exit(1);
     }
 
@@ -1168,6 +1191,7 @@ static void handle_args(struct thr_info *tip, int argc, char *argv[]) {
 
     ainfo->trace_fn = argv[8];
 
+    tip->ofp = fopen(argv[9], "w");
     tip->ainfo = ainfo;
 }
 
