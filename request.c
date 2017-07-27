@@ -1122,8 +1122,10 @@ static void *replay_sub(void *arg) {
 
     if (tip->ainfo->method == 0)
         raid5_online(tip);
-    else
+    else if (tip->ainfo->method == 1)
         oi_raid_online(tip);
+    else if (tip->ainfo->method == 2)
+        rs_online(tip);
 
     pthread_mutex_lock(&tip->mutex);
     tip->iter_send_done = 1;
@@ -1174,6 +1176,9 @@ static void handle_args(struct thr_info *tip, int argc, char *argv[]) {
     ainfo->k = atoi(argv[3]);
 
     ainfo->g = 3;
+
+    ainfo->n = 6;
+    ainfo->m = 3;
 
     ainfo->failedDisk = 9;
 

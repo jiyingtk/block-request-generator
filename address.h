@@ -18,6 +18,8 @@ struct addr_info {
     int b, v, r, k, lambda;
     int g;
 
+    int n, m; //RS Code, n data, m parity
+
     int running_time;
     char *trace_fn;
 };
@@ -53,9 +55,13 @@ void init_parameters(struct addr_info *ainfo) {
     if (ainfo->method == 0) {   //RAID5
         ainfo->disk_nums = ainfo->disk_nums / ainfo->k * ainfo->k;
         ainfo->capacity_total = ainfo->capacity / BLOCK * ainfo->disk_nums / ainfo->k * (ainfo->k - 1);
-
-    } else {
+    } else if (ainfo->method == 1) {    //OI-RAID
         ainfo->capacity_total = ainfo->stripe_nums * (ainfo->k - 1) * ainfo->blocks_partition;
+    } else if (ainfo->method == 2) {    //RS Code
+        ainfo->disk_nums = ainfo->disk_nums / (ainfo->n + ainfo->m) * (ainfo->n + ainfo->m);
+        ainfo->capacity_total = ainfo->capacity / BLOCK * ainfo->disk_nums / (ainfo->n + ainfo->m) * (ainfo->n);
+    } else {
+        exit(1);
     }
 
 }
@@ -435,6 +441,135 @@ void oi_raid_request(struct thr_info *tip, int logicAddr, int reqSize, char op )
     }
 }
 
+void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
+    struct iocb *list[MAX_DEVICE_NUM];
+    struct request_info reqs[MAX_DEVICE_NUM];
+
+    struct addr_info *ainfo = tip->ainfo;
+
+    int dataDiskNum = ainfo->n;
+    int dataPerStripe = (dataDiskNum + ainfo->m) * dataDiskNum;
+    int maxOffset, reqBlockNum;
+    int stripeId, groupId, inStripeAddr, inBlockId, diskId, ectorId;
+    addr_type blockId;
+
+    maxOffset = ainfo->capacity_total;
+
+    if(reqSize % BLOCK == 0) {
+        reqBlockNum = reqSize / BLOCK;
+    } else {
+        reqBlockNum = reqSize / BLOCK + 1;
+    }
+
+    int groups = ainfo->disk_nums / (ainfo->n + ainfo->m);
+
+    int i, req_count;
+
+    for(i = 0; i < reqBlockNum; i++) {
+        if (logicAddr < maxOffset) {
+            req_count = 0;
+
+            stripeId = logicAddr / (dataPerStripe * groups);
+            groupId = (logicAddr % (dataPerStripe * groups)) / dataPerStripe;
+            inStripeAddr = logicAddr % dataPerStripe;
+            inBlockId = inStripeAddr / (dataDiskNum + ainfo->m);
+
+            diskId = inStripeAddr % (dataDiskNum + ainfo->m);
+
+            if (diskId >= dataDiskNum - inBlockId) { //****这里就完成了轮转
+                if (dataDiskNum < diskId)
+                    inBlockId += dataDiskNum + ainfo->m - diskId;
+                else
+                    inBlockId += ainfo->m;
+            }
+
+            diskId += groupId * (ainfo->n + ainfo->m);
+            blockId = stripeId * (ainfo->n + ainfo->m) + inBlockId;
+
+            long long start_time = gettime();
+
+            int ntodo = 0, ndone;
+            reqs[req_count].type = 1;
+            reqs[req_count].disk_num = diskId;
+            reqs[req_count].offset = blockId * BLOCK;
+            reqs[req_count].size = BLOCK;
+            reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'r';
+            req_count++;
+            ntodo++;
+
+            hash_add(tip->ht, start_time, 1);
+
+            if (op == 'w' || op == 'W') {
+                reqs[req_count - 1].original_op = 'w';
+
+                reqs[req_count].type = 0;
+                reqs[req_count].disk_num = diskId;
+                reqs[req_count].offset = blockId * BLOCK;
+                reqs[req_count].size = BLOCK;
+                reqs[req_count].stripe_id = -1;
+                reqs[req_count].start_time = start_time;
+                reqs[req_count].original_op = 'w';
+                req_count++;
+                ntodo++;
+
+
+                int k;
+                int pdisk = (ainfo->n + ainfo->m + dataDiskNum - inBlockId) % (ainfo->n + ainfo->m);
+                for (k = 0; k < ainfo->m; k++) {
+                    reqs[req_count].type = 1;
+                    reqs[req_count].disk_num = (pdisk + k) % (ainfo->n + ainfo->m) + groupId * (ainfo->n + ainfo->m);
+                    reqs[req_count].offset = blockId * BLOCK;
+                    reqs[req_count].size = BLOCK;
+                    reqs[req_count].stripe_id = -1;
+                    reqs[req_count].start_time = start_time;
+                    reqs[req_count].original_op = 'w';
+                    req_count++;
+                    ntodo++;
+
+                    reqs[req_count].type = 0;
+                    reqs[req_count].disk_num = (pdisk + k) % (ainfo->n + ainfo->m) + groupId * (ainfo->n + ainfo->m);
+                    reqs[req_count].offset = blockId * BLOCK;
+                    reqs[req_count].size = BLOCK;
+                    reqs[req_count].stripe_id = -1;
+                    reqs[req_count].start_time = start_time;
+                    reqs[req_count].original_op = 'w';
+                    req_count++;
+                    ntodo++;
+                }
+
+                hash_add(tip->ht, start_time, 2 * ainfo->m);
+            }
+
+            iocbs_map(tip, list, reqs, ntodo, 0);
+
+            ndone = io_submit(tip->ctx, ntodo, list);
+
+            if (ndone != ntodo) {
+                fatal("io_submit", ERR_SYSCALL,
+                      "%d: io_submit(%d:%ld) failed (%s)\n",
+                      tip->cpu, ntodo, ndone,
+                      strerror(labs(ndone)));
+                /*NOTREACHED*/
+            }
+
+            pthread_mutex_lock(&tip->mutex);
+            tip->naios_out += ndone;
+            assert(tip->naios_out <= naios);
+
+            if (tip->reap_wait) {
+                tip->reap_wait = 0;
+                pthread_cond_signal(&tip->cond);
+            }
+
+            pthread_mutex_unlock(&tip->mutex);
+
+
+            logicAddr++;
+        }
+    }
+}
 
 //访问21个磁盘的RAID5盘阵，每3个磁盘为一个2+1的RAID5
 void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
@@ -584,7 +719,7 @@ void raid5_online(struct thr_info *tip) {
     int req_count = 0;
 
     while (!is_finish(ainfo, last_time)) {
-        if ((req_count + 1) % 100 == 0)
+        if ((req_count + 1) % 101 == 0)
             fprintf(stderr, "has process %d request\n", req_count);
 
         int retCode;
@@ -624,7 +759,7 @@ void oi_raid_online(struct thr_info *tip) {
     int req_count = 0;
 
     while (!is_finish(ainfo, last_time)) {
-        if ((req_count + 1) % 100 == 0)
+        if ((req_count + 1) % 101 == 0)
             fprintf(stderr, "has process %d request\n", req_count);
 
         int retCode;
@@ -645,6 +780,45 @@ void oi_raid_online(struct thr_info *tip) {
 
         logicAddr = (logicAddr / 8) % ainfo->capacity_total;
         oi_raid_request(tip, logicAddr, size, op);
+        req_count++;
+    }
+
+    fclose(f);
+}
+
+void rs_online(struct thr_info *tip) {
+    struct addr_info *ainfo = tip->ainfo;
+
+    int hostName, logicAddr, size;
+    char op;
+    double timeStamp;
+
+    FILE *f = fopen(ainfo->trace_fn, "r");
+    long long last_time = gettime();
+    int req_count = 0;
+
+    while (!is_finish(ainfo, last_time)) {
+        if ((req_count + 1) % 101 == 0)
+            fprintf(stderr, "has process %d request\n", req_count);
+
+        int retCode;
+        retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);
+
+        //while (retCode == 5){
+        //  retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);;
+        //}
+        if (retCode != 5)
+            break;
+
+        long long cur_time = gettime();
+        long long time_diff = (long long) (timeStamp * 1000 * 1000 * 1000) - (cur_time - last_time);
+
+        if (time_diff > 1000) {
+            usleep(time_diff / 1000);
+        }
+
+        logicAddr = (logicAddr / 8) % ainfo->capacity_total;
+        rs_request(tip, logicAddr, size, op);
         req_count++;
     }
 
