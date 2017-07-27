@@ -584,7 +584,7 @@ void raid5_online(struct thr_info *tip) {
     int req_count = 0;
 
     while (!is_finish(ainfo, last_time)) {
-        if ((req_count + 1) % 20 == 0)
+        if ((req_count + 1) % 100 == 0)
             fprintf(stderr, "has process %d request\n", req_count);
 
         int retCode;
@@ -624,7 +624,7 @@ void oi_raid_online(struct thr_info *tip) {
     int req_count = 0;
 
     while (!is_finish(ainfo, last_time)) {
-        if ((req_count + 1) % 20 == 0)
+        if ((req_count + 1) % 100 == 0)
             fprintf(stderr, "has process %d request\n", req_count);
 
         int retCode;

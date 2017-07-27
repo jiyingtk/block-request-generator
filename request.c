@@ -27,7 +27,7 @@
 #define ERR_SYSCALL         2
 
 #define MAX_DEVICE_NUM 128
-#define CACHED_STRIPE_NUM 258
+#define CACHED_STRIPE_NUM 256
 
 #include <getopt.h>
 
