@@ -1,4 +1,4 @@
-
+//#define DEGRADED
 #define BLOCK 4096
 
 struct addr_info {
@@ -19,6 +19,7 @@ struct addr_info {
     int g;
 
     int n, m; //RS Code, n data, m parity
+    int g2; //S2-RAID
 
     int running_time;
     char *trace_fn;
@@ -32,38 +33,117 @@ int **diskRegion;           //每个disk包含的Region号
 
 void makeSubRAID(struct addr_info *ainfo);
 
-
 void init_parameters(struct addr_info *ainfo) {
-    ainfo->disk_nums = ainfo->v * ainfo->g;
     ainfo->blocks_per_strip = ainfo->strip_size / BLOCK;
-    ainfo->stripe_nums = ainfo->v * ainfo->g * ainfo->r * (ainfo->g - 1) / ainfo->k;
 
     ainfo->capacity /= ainfo->strip_size;
-
-    addr_type spareSize = (ainfo->capacity + ainfo->disk_nums - 1) / ainfo->disk_nums;
-    ainfo->strips_partition = (ainfo->capacity - spareSize) / (ainfo->g * ainfo->r);
-    ainfo->blocks_partition = ainfo->strips_partition * ainfo->blocks_per_strip;
-
-    ainfo->data_blocks = ainfo->capacity - spareSize;
-    ainfo->data_blocks *= ainfo->blocks_per_strip;
-
-    spareSize *= ainfo->strip_size;
     ainfo->capacity *= ainfo->strip_size;
-
-    fprintf(stderr, "spareSize %fGB, capacity %fGB\n", spareSize * 1.0f / 1024 / 1024 / 1024, ainfo->capacity * 1.0f / 1024 / 1024 / 1024);
-
+   
+    ainfo->stripe_nums = 1;
+    
     if (ainfo->method == 0) {   //RAID5
         ainfo->disk_nums = ainfo->disk_nums / ainfo->k * ainfo->k;
+        ainfo->g2 = ainfo->disk_nums / ainfo->k;
+        ainfo->stripe_nums = ainfo->g2 * ainfo->g2;
+
+        ainfo->capacity /= ainfo->strip_size;
+
+        int align = ainfo->g2;
+        ainfo->capacity /= align;
+        ainfo->capacity *= align;
+
+        ainfo->strips_partition = ainfo->capacity / ainfo->g2;
+        ainfo->blocks_partition = ainfo->strips_partition * ainfo->blocks_per_strip;
+
+        ainfo->data_blocks = ainfo->capacity;
+        ainfo->data_blocks *= ainfo->blocks_per_strip;
+
+        ainfo->capacity *= ainfo->strip_size;
+
         ainfo->capacity_total = ainfo->capacity / BLOCK * ainfo->disk_nums / ainfo->k * (ainfo->k - 1);
     } else if (ainfo->method == 1) {    //OI-RAID
+        ainfo->stripe_nums = ainfo->v * ainfo->g * ainfo->r * (ainfo->g - 1) / ainfo->k;
+
+        ainfo->capacity /= ainfo->strip_size;
+
+        ainfo->capacity /= ainfo->g * ainfo->r;
+        ainfo->capacity *= ainfo->g * ainfo->r;
+
+        ainfo->strips_partition = (ainfo->capacity) / (ainfo->g * ainfo->r);
+        ainfo->blocks_partition = ainfo->strips_partition * ainfo->blocks_per_strip;
+
+        ainfo->data_blocks = ainfo->capacity;
+        ainfo->data_blocks *= ainfo->blocks_per_strip;
+
+        ainfo->capacity *= ainfo->strip_size;
+
         ainfo->capacity_total = ainfo->stripe_nums * (ainfo->k - 1) * ainfo->blocks_partition;
     } else if (ainfo->method == 2) {    //RS Code
         ainfo->disk_nums = ainfo->disk_nums / (ainfo->n + ainfo->m) * (ainfo->n + ainfo->m);
+        ainfo->g2 = ainfo->disk_nums / (ainfo->n + ainfo->m);
+        ainfo->stripe_nums = ainfo->g2 * ainfo->g2;
+
+        ainfo->capacity /= ainfo->strip_size;
+
+        int align = ainfo->g2;
+        ainfo->capacity /= align;
+        ainfo->capacity *= align;
+
+        ainfo->strips_partition = ainfo->capacity / ainfo->g2;
+        ainfo->blocks_partition = ainfo->strips_partition * ainfo->blocks_per_strip;
+
+        ainfo->data_blocks = ainfo->capacity;
+        ainfo->data_blocks *= ainfo->blocks_per_strip;
+
+        ainfo->capacity *= ainfo->strip_size;
+
         ainfo->capacity_total = ainfo->capacity / BLOCK * ainfo->disk_nums / (ainfo->n + ainfo->m) * (ainfo->n);
+    } else if (ainfo->method == 3) {    //S2-RAID
+        ainfo->disk_nums = ainfo->disk_nums / ainfo->k * ainfo->k;
+        ainfo->g2 = ainfo->disk_nums / ainfo->k;
+        ainfo->stripe_nums = ainfo->g2 * ainfo->g2;
+
+        ainfo->capacity /= ainfo->strip_size;
+
+        int align = ainfo->g2;
+        ainfo->capacity /= align;
+        ainfo->capacity *= align;
+
+        ainfo->strips_partition = ainfo->capacity / ainfo->g2;
+        ainfo->blocks_partition = ainfo->strips_partition * ainfo->blocks_per_strip;
+
+        ainfo->data_blocks = ainfo->capacity;
+        ainfo->data_blocks *= ainfo->blocks_per_strip;
+
+        ainfo->capacity *= ainfo->strip_size;
+
+        ainfo->capacity_total = ainfo->capacity / BLOCK * ainfo->disk_nums / ainfo->k * (ainfo->k - 1);
+        
+    } else if (ainfo->method == 4) {    //Parity Declustering
+        ainfo->stripe_nums = ainfo->b;
+
+        ainfo->capacity /= ainfo->strip_size;
+
+        int align = ainfo->r;
+        ainfo->capacity /= align;
+        ainfo->capacity *= align;
+
+        ainfo->strips_partition = ainfo->capacity / ainfo->r;
+        ainfo->blocks_partition = ainfo->strips_partition * ainfo->blocks_per_strip;
+
+        ainfo->data_blocks = ainfo->capacity;
+        ainfo->data_blocks *= ainfo->blocks_per_strip;
+
+        ainfo->capacity *= ainfo->strip_size;
+
+        ainfo->capacity_total = ainfo->capacity / BLOCK * ainfo->disk_nums / ainfo->k * (ainfo->k - 1);
+
     } else {
         exit(1);
     }
 
+    fprintf(stderr, "capacity %fGB\n", ainfo->capacity * 1.0f / 1024 / 1024 / 1024);
+   
 }
 
 void init_addr_info(struct addr_info *ainfo) {
@@ -73,24 +153,45 @@ void init_addr_info(struct addr_info *ainfo) {
 
     fscanf(bibd_f, "%d %d %d %d %d", &ainfo->b, &ainfo->v, &ainfo->k, &ainfo->r, &ainfo->lambda);
 
+    ainfo->disk_nums = ainfo->v * ainfo->g;
+
+    if (ainfo->method == 4) {
+        fclose(bibd_f);
+
+        sprintf(fn, "%d.%d.bd", ainfo->disk_nums, ainfo->k);
+        bibd_f = fopen(fn, "r");
+        fscanf(bibd_f, "%d %d %d %d %d", &ainfo->b, &ainfo->v, &ainfo->k, &ainfo->r, &ainfo->lambda);
+
+        //fprintf(stderr, "%d %d %d %d %d\n", ainfo->b, ainfo->v, ainfo->k, ainfo->r, ainfo->lambda);
+        //exit(1);
+    }
+
     init_parameters(ainfo);
 
     int i, j;
-    int stripe_nums = ainfo->stripe_nums;
+    int stripe_nums = ainfo->stripe_nums, region_nums = 1;
+    int totalDiskNum = ainfo->method != 2 ? ainfo->k : ainfo->n + ainfo->m;
+    
+    if (ainfo->method == 1)
+        region_nums = ainfo->g * ainfo->r;
+    else if (ainfo->method == 0 || ainfo->method == 2 || ainfo->method == 3)
+        region_nums = ainfo->g2;
+    else if (ainfo->method == 4)
+        region_nums = ainfo->r;
 
-    diskArray = (typeof(diskArray)) malloc(sizeof(typeof(*diskArray)) * stripe_nums);
-    offsetArray = (typeof(offsetArray)) malloc(sizeof(typeof(*offsetArray)) * stripe_nums);
+        diskArray = (typeof(diskArray)) malloc(sizeof(typeof(*diskArray)) * stripe_nums);
+        offsetArray = (typeof(offsetArray)) malloc(sizeof(typeof(*offsetArray)) * stripe_nums);
 
-    for (i = 0; i < stripe_nums; i++) {
-        diskArray[i] = (typeof(*diskArray)) malloc(sizeof(typeof(**diskArray)) * ainfo->k);
-        offsetArray[i] = (typeof(*offsetArray)) malloc(sizeof(typeof(**offsetArray)) * ainfo->k);
-    }
+        for (i = 0; i < stripe_nums; i++) {
+            diskArray[i] = (typeof(*diskArray)) malloc(sizeof(typeof(**diskArray)) * totalDiskNum);
+            offsetArray[i] = (typeof(*offsetArray)) malloc(sizeof(typeof(**offsetArray)) * totalDiskNum);
+        }
 
-    diskRegion = (typeof(diskRegion)) malloc(sizeof(typeof(*diskRegion)) * ainfo->v * ainfo->g);
+        diskRegion = (typeof(diskRegion)) malloc(sizeof(typeof(*diskRegion)) * ainfo->disk_nums);
 
-    for (i = 0; i < ainfo->v * ainfo->g; i++) {
-        diskRegion[i] = (typeof(*diskRegion)) malloc(sizeof(typeof(**diskRegion)) * ainfo->g * ainfo->r);
-    }
+        for (i = 0; i < ainfo->disk_nums; i++) {
+            diskRegion[i] = (typeof(*diskRegion)) malloc(sizeof(typeof(**diskRegion)) * region_nums);
+        }
 
     int **bibd, **spd;
     bibd = (typeof(bibd)) malloc(sizeof(typeof(*bibd)) * ainfo->b);
@@ -103,28 +204,61 @@ void init_addr_info(struct addr_info *ainfo) {
         }
     }
 
-    spd = (typeof(spd)) malloc(sizeof(typeof(*spd)) * ainfo->g * (ainfo->g - 1));
+    int g = ainfo->method == 3 ? ainfo->g2 : ainfo->g;
 
-    for (i = 0; i < ainfo->g * (ainfo->g - 1); i++) {
+    spd = (typeof(spd)) malloc(sizeof(typeof(*spd)) * g * g);
+
+    for (i = 0; i < g * g; i++) {
         spd[i] = (typeof(*spd)) malloc(sizeof(typeof(**spd)) * ainfo->k);
 
         for (j = 0; j < ainfo->k; j++) {
             int a, b;
-            a = i / ainfo->g;
-            b = i % ainfo->g;
-            spd[i][j] = (b + a * j) % ainfo->g;
+            a = i / g;
+            b = i % g;
+            spd[i][j] = (b + a * j) % g;
         }
     }
 
     ainfo->bibd = bibd;
     ainfo->spd = spd;
 
-    makeSubRAID(ainfo);
+    if (ainfo->method == 0 || ainfo->method == 2) {
+        for(i = 0; i < stripe_nums; i++) {
+            for(j = 0; j < totalDiskNum; j++) {
+                diskArray[i][j] = (i % ainfo->g2) * totalDiskNum + j;
+                offsetArray[i][j] = i / ainfo->g2;
+                diskRegion[diskArray[i][j]][offsetArray[i][j]] = i;
+            }
+        }
+    }
+    else if (ainfo->method == 1)
+        makeSubRAID(ainfo);
+    else if (ainfo->method == 3) {
+        for(i = 0; i < stripe_nums; i++) {
+            for(j = 0; j < ainfo->k; j++) {
+                diskArray[i][j] = spd[i][j] + j * ainfo->g2;
+                offsetArray[i][j] = i / ainfo->g2;
+                diskRegion[diskArray[i][j]][offsetArray[i][j]] = i;
+            }
+        }
+    }
+    else if (ainfo->method == 4) {
+        int disk[MAX_DEVICE_NUM] = {0};
+        for(i = 0; i < stripe_nums; i++) {
+            for(j = 0; j < ainfo->k; j++) {
+                diskArray[i][j] = bibd[i][j];
+                offsetArray[i][j] = disk[diskArray[i][j]];
+                disk[diskArray[i][j]]++;
+
+                diskRegion[diskArray[i][j]][offsetArray[i][j]] = i;
+            }
+        }
+    }
 }
 
 void destroy_addr_info(struct addr_info *ainfo) {
     int i;
-    int stripe_nums = ainfo->v * ainfo->g * ainfo->r * (ainfo->g - 1) / ainfo->k;
+    int stripe_nums = ainfo->stripe_nums;
 
     for (i = 0; i < stripe_nums; i++) {
         free(diskArray[i]);
@@ -134,7 +268,7 @@ void destroy_addr_info(struct addr_info *ainfo) {
     free(diskArray);
     free(offsetArray);
 
-    for (i = 0; i < ainfo->v * ainfo->g; i++) {
+    for (i = 0; i < ainfo->disk_nums; i++) {
         free(diskRegion[i]);
     }
 
@@ -149,8 +283,9 @@ void destroy_addr_info(struct addr_info *ainfo) {
     free(bibd);
 
     int **spd = ainfo->spd;
+    int g = ainfo->method == 3 ? ainfo->g2 : ainfo->g;
 
-    for (i = 0; i < ainfo->g * (ainfo->g - 1); i++) {
+    for (i = 0; i < g * g; i++) {
         free(spd[i]);
     }
 
@@ -158,6 +293,7 @@ void destroy_addr_info(struct addr_info *ainfo) {
 
     free(ainfo);
 }
+
 
 void makeSubRAID(struct addr_info *ainfo) {
     int i, j, k;
@@ -208,7 +344,7 @@ void makeSubRAID(struct addr_info *ainfo) {
 }
 
 
-void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , int offsets[], int reqSize, char op) {
+void sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , int offsets[], int reqSize, char op) {
     struct iocb *list[MAX_DEVICE_NUM];
     struct request_info reqs[MAX_DEVICE_NUM];
 
@@ -255,8 +391,9 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
         blockId[0] = offsets[virDiskId[0]] * ainfo->blocks_partition + stripeId * (dataDiskNum + 1) + inBlockId;
 
         long long start_time = gettime();
-
         int ntodo = 0, ndone;
+
+#ifndef DEGRADED
         reqs[req_count].type = 1;
         reqs[req_count].disk_num = diskId[0];
         reqs[req_count].offset = blockId[0] * BLOCK;
@@ -266,8 +403,55 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
         reqs[req_count].original_op = 'r';
         req_count++;
         ntodo++;
+#else
+        int read_reqs = 0;
+        if (diskId[0] == ainfo->failedDisk && (op == 'r' || op == 'R')) {
+            int j;
+            for (j = 0; j < ainfo->k; j++) {
+                if (disks[j] != ainfo->failedDisk) {
+                    blockId[0] = offsets[j] * ainfo->blocks_partition + stripeId * (dataDiskNum + 1) + inBlockId;
+                    reqs[req_count].type = 1;
+                    reqs[req_count].disk_num = disks[j];
+                    reqs[req_count].offset = blockId[0] * BLOCK;
+                    reqs[req_count].size = BLOCK;
+                    reqs[req_count].stripe_id = -1;
+                    reqs[req_count].start_time = start_time;
+                    reqs[req_count].original_op = 'r';
+                    req_count++;
+                    ntodo++;
+                    read_reqs++;
+                }
+            }
+            fprintf(stderr, "degraded read %d\n", read_reqs);    
+        }
+        else {
+            reqs[req_count].type = 1;
+            reqs[req_count].disk_num = diskId[0];
+            reqs[req_count].offset = blockId[0] * BLOCK;
+            reqs[req_count].size = BLOCK;
+            reqs[req_count].stripe_id = -1;
+            reqs[req_count].start_time = start_time;
+            reqs[req_count].original_op = 'r';
+            req_count++;
+            ntodo++;
+            read_reqs++;
+        }
+#endif
 
-        hash_add(tip->ht, start_time, 1);
+
+        pthread_mutex_lock(&tip->mutex);
+        if (op == 'r' || op == 'R') 
+#ifndef DEGRADED
+            hash_add(tip->ht, start_time, 1);
+#else
+            hash_add(tip->ht, start_time, read_reqs);
+#endif
+        else if (ainfo->method == 1) //OI-RAID
+            hash_add(tip->ht, start_time, 8);
+        else    //S2-RAID, Parity Declustering
+            hash_add(tip->ht, start_time, 4);
+
+        pthread_mutex_unlock(&tip->mutex);
 
         if(op == 'w' || op == 'W') {
             reqs[req_count - 1].original_op = 'w';
@@ -306,6 +490,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             reqs[req_count].original_op = 'w';
             req_count++;
             ntodo++;
+
+        if (ainfo->method == 1) {
 
             // 2.  data对应的local parity
             groupId = disks[virDiskId[0]] / ainfo->g;
@@ -369,7 +555,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
             req_count++;
             ntodo++;
 
-            hash_add(tip->ht, start_time, 8);
+        }
+
         }
 
         iocbs_map(tip, list, reqs, ntodo, 0);
@@ -398,50 +585,8 @@ void oi_sub_raid_request(struct thr_info *tip, int subRAIDAddr, int disks[] , in
     }
 }
 
-//访问oi-raid
-void oi_raid_request(struct thr_info *tip, int logicAddr, int reqSize, char op ) {
-    int i;
-    int subRAIDId;
-    int subRAIDAddr;
 
-    int reqBlockNum;
-
-    int disks[MAX_DEVICE_NUM], offsets[MAX_DEVICE_NUM];
-    struct addr_info *ainfo = tip->ainfo;
-
-    subRAIDId = logicAddr / (ainfo->blocks_partition * (ainfo->k - 1));
-    subRAIDAddr = logicAddr % (ainfo->blocks_partition * (ainfo->k - 1));
-
-    if(reqSize % BLOCK == 0) {
-        reqBlockNum = reqSize / BLOCK;
-    } else {
-        reqBlockNum = reqSize / BLOCK + 1;
-    }
-
-    for(i = 0; i < ainfo->k; i++) {
-        disks[i] = diskArray[subRAIDId][i];
-        offsets[i] = offsetArray[subRAIDId][i];
-    }
-
-    if(subRAIDAddr + reqBlockNum <= (ainfo->blocks_partition * (ainfo->k - 1))) {
-        oi_sub_raid_request(tip, subRAIDAddr, disks, offsets, reqSize, op);
-
-    } else {
-        int reqSizeFirst, reqSizeLast;
-        reqSizeFirst = ((ainfo->blocks_partition * (ainfo->k - 1)) - subRAIDAddr) * BLOCK;
-        oi_sub_raid_request(tip, subRAIDAddr, disks, offsets, reqSizeFirst, op);
-
-        for(i = 0; i < ainfo->k; i++) {
-            disks[i] = diskArray[subRAIDId + 1][i];
-            offsets[i] = offsetArray[subRAIDId + 1][i];
-        }
-
-        reqSizeLast = (subRAIDAddr + reqBlockNum - (ainfo->blocks_partition * (ainfo->k - 1))) * BLOCK;
-        oi_sub_raid_request(tip, 0, disks, offsets, reqSizeLast, op);
-    }
-}
-
-void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
+void rs_request(struct thr_info *tip, int logicAddr, int disks[] , int offsets[], int reqSize, char op) {
     struct iocb *list[MAX_DEVICE_NUM];
     struct request_info reqs[MAX_DEVICE_NUM];
 
@@ -453,7 +598,7 @@ void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
     int stripeId, groupId, inStripeAddr, inBlockId, diskId, ectorId;
     addr_type blockId;
 
-    maxOffset = ainfo->capacity_total;
+    maxOffset = ainfo->blocks_partition * ainfo->n;
 
     if(reqSize % BLOCK == 0) {
         reqBlockNum = reqSize / BLOCK;
@@ -461,7 +606,7 @@ void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
         reqBlockNum = reqSize / BLOCK + 1;
     }
 
-    int groups = ainfo->disk_nums / (ainfo->n + ainfo->m);
+    int groups = 1;
 
     int i, req_count;
 
@@ -482,31 +627,76 @@ void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
                 else
                     inBlockId += ainfo->m;
             }
+            
+            int diskIdInGroup = diskId;
 
             diskId += groupId * (ainfo->n + ainfo->m);
             blockId = stripeId * (ainfo->n + ainfo->m) + inBlockId;
 
             long long start_time = gettime();
-
             int ntodo = 0, ndone;
+
+
+#ifndef DEGRADED
             reqs[req_count].type = 1;
-            reqs[req_count].disk_num = diskId;
-            reqs[req_count].offset = blockId * BLOCK;
+            reqs[req_count].disk_num = disks[diskId];
+            reqs[req_count].offset = (blockId + offsets[diskId] * ainfo->blocks_partition) * BLOCK;
             reqs[req_count].size = BLOCK;
             reqs[req_count].stripe_id = -1;
             reqs[req_count].start_time = start_time;
             reqs[req_count].original_op = 'r';
             req_count++;
             ntodo++;
+#else
+            int read_reqs = 0;
+            if (diskId == ainfo->failedDisk && (op == 'r' || op == 'R')) {
+                int k;
+                for (k = 1; k <= ainfo->n; k++) {
+                    reqs[req_count].type = 1;
+                    int diskId2 = (diskIdInGroup + k) % (ainfo->n + ainfo->m) + groupId * (ainfo->n + ainfo->m);
+                    reqs[req_count].disk_num = disks[diskId2];
+                    reqs[req_count].offset = (blockId + offsets[diskId2] * ainfo->blocks_partition) * BLOCK;
+                    reqs[req_count].size = BLOCK;
+                    reqs[req_count].stripe_id = -1;
+                    reqs[req_count].start_time = start_time;
+                    reqs[req_count].original_op = 'r';
+                    req_count++;
+                    ntodo++;
+                    read_reqs++;
+                }
+            fprintf(stderr, "degraded read %d\n", read_reqs);    
+            }
+            else {
+                reqs[req_count].type = 1;
+                reqs[req_count].disk_num = disks[diskId];
+                reqs[req_count].offset = (blockId + offsets[diskId] * ainfo->blocks_partition) * BLOCK;
+                reqs[req_count].size = BLOCK;
+                reqs[req_count].stripe_id = -1;
+                reqs[req_count].start_time = start_time;
+                reqs[req_count].original_op = 'r';
+                req_count++;
+                ntodo++;
+                read_reqs++;
+            }
+#endif
 
-            hash_add(tip->ht, start_time, 1);
+            pthread_mutex_lock(&tip->mutex);
+            if (op == 'r' || op == 'R') 
+#ifndef DEGRADED
+                hash_add(tip->ht, start_time, 1);
+#else
+                hash_add(tip->ht, start_time, read_reqs);
+#endif
+            else
+                hash_add(tip->ht, start_time, 2 * ainfo->m + 2);
+            pthread_mutex_unlock(&tip->mutex);
 
             if (op == 'w' || op == 'W') {
                 reqs[req_count - 1].original_op = 'w';
 
                 reqs[req_count].type = 0;
-                reqs[req_count].disk_num = diskId;
-                reqs[req_count].offset = blockId * BLOCK;
+                reqs[req_count].disk_num = disks[diskId];
+                reqs[req_count].offset = (blockId + offsets[diskId] * ainfo->blocks_partition) * BLOCK;
                 reqs[req_count].size = BLOCK;
                 reqs[req_count].stripe_id = -1;
                 reqs[req_count].start_time = start_time;
@@ -518,9 +708,10 @@ void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
                 int k;
                 int pdisk = (ainfo->n + ainfo->m + dataDiskNum - inBlockId) % (ainfo->n + ainfo->m);
                 for (k = 0; k < ainfo->m; k++) {
+                    int diskId2 = (pdisk + k) % (ainfo->n + ainfo->m) + groupId * (ainfo->n + ainfo->m);
                     reqs[req_count].type = 1;
-                    reqs[req_count].disk_num = (pdisk + k) % (ainfo->n + ainfo->m) + groupId * (ainfo->n + ainfo->m);
-                    reqs[req_count].offset = blockId * BLOCK;
+                    reqs[req_count].disk_num = disks[diskId2];
+                    reqs[req_count].offset = (blockId + offsets[diskId2] * ainfo->blocks_partition) * BLOCK;
                     reqs[req_count].size = BLOCK;
                     reqs[req_count].stripe_id = -1;
                     reqs[req_count].start_time = start_time;
@@ -529,8 +720,8 @@ void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
                     ntodo++;
 
                     reqs[req_count].type = 0;
-                    reqs[req_count].disk_num = (pdisk + k) % (ainfo->n + ainfo->m) + groupId * (ainfo->n + ainfo->m);
-                    reqs[req_count].offset = blockId * BLOCK;
+                    reqs[req_count].disk_num = disks[diskId2];
+                    reqs[req_count].offset = (blockId + offsets[diskId2] * ainfo->blocks_partition) * BLOCK;
                     reqs[req_count].size = BLOCK;
                     reqs[req_count].stripe_id = -1;
                     reqs[req_count].start_time = start_time;
@@ -539,7 +730,6 @@ void rs_request(struct thr_info *tip, int logicAddr, int reqSize, char op) {
                     ntodo++;
                 }
 
-                hash_add(tip->ht, start_time, 2 * ainfo->m);
             }
 
             iocbs_map(tip, list, reqs, ntodo, 0);
@@ -611,6 +801,7 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
             if (diskId >= dataDiskNum - inBlockId) { //****这里就完成了轮转
                 inBlockId += 1;
             }
+            int diskIdInGroup = diskId;
 
             diskId += groupId * ainfo->k;
             blockId = stripeId * (dataDiskNum + 1) + inBlockId;
@@ -618,6 +809,7 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
             long long start_time = gettime();
 
             int ntodo = 0, ndone;
+#ifndef DEGRADED
             reqs[req_count].type = 1;
             reqs[req_count].disk_num = diskId;
             reqs[req_count].offset = blockId * BLOCK;
@@ -627,8 +819,49 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
             reqs[req_count].original_op = 'r';
             req_count++;
             ntodo++;
+#else
+            int read_reqs = 0;
+            if (diskId == ainfo->failedDisk && (op == 'r' || op == 'R')) {
+                int k;
+                for (k = 1; k < ainfo->k; k++) {
+                    reqs[req_count].type = 1;
+                    reqs[req_count].disk_num = (diskIdInGroup + k) % ainfo->k + groupId * ainfo->k;
+                    reqs[req_count].offset = blockId * BLOCK;
+                    reqs[req_count].size = BLOCK;
+                    reqs[req_count].stripe_id = -1;
+                    reqs[req_count].start_time = start_time;
+                    reqs[req_count].original_op = 'r';
+                    req_count++;
+                    ntodo++;
+                    read_reqs++;
+                }
+                fprintf(stderr, "degraded read %d\n", read_reqs);    
+            }
+            else {
+                reqs[req_count].type = 1;
+                reqs[req_count].disk_num = diskId;
+                reqs[req_count].offset = blockId * BLOCK;
+                reqs[req_count].size = BLOCK;
+                reqs[req_count].stripe_id = -1;
+                reqs[req_count].start_time = start_time;
+                reqs[req_count].original_op = 'r';
+                req_count++;
+                ntodo++;
+                read_reqs++;
+            }
+#endif
 
-            hash_add(tip->ht, start_time, 1);
+            pthread_mutex_lock(&tip->mutex);
+            if (op == 'r' || op == 'R') 
+#ifndef DEGRADED
+                hash_add(tip->ht, start_time, 1);
+#else
+                hash_add(tip->ht, start_time, read_reqs);
+#endif
+            else
+                hash_add(tip->ht, start_time, 4); 
+            pthread_mutex_unlock(&tip->mutex);
+
 
             if (op == 'w' || op == 'W') {
                 reqs[req_count - 1].original_op = 'w';
@@ -663,7 +896,6 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
                 req_count++;
                 ntodo++;
 
-                hash_add(tip->ht, start_time, 4);
             }
 
             iocbs_map(tip, list, reqs, ntodo, 0);
@@ -695,6 +927,55 @@ void raid5_3time7disks_request(struct thr_info *tip, int logicAddr, int reqSize,
     }
 }
 
+void region_request(struct thr_info *tip, int logicAddr, int reqSize, char op ) {
+    int i;
+    int subRAIDId;
+    int subRAIDAddr;
+
+    int reqBlockNum;
+
+    int disks[MAX_DEVICE_NUM], offsets[MAX_DEVICE_NUM];
+    struct addr_info *ainfo = tip->ainfo;
+
+    int dataDiskNum = ainfo->method != 2 ? ainfo->k - 1 : ainfo->n;
+    int totalDiskNum = ainfo->method != 2 ? ainfo->k : ainfo->n + ainfo->m;
+
+    subRAIDId = logicAddr / (ainfo->blocks_partition * dataDiskNum);
+    subRAIDAddr = logicAddr % (ainfo->blocks_partition * dataDiskNum);
+
+    if(reqSize % BLOCK == 0) {
+        reqBlockNum = reqSize / BLOCK;
+    } else {
+        reqBlockNum = reqSize / BLOCK + 1;
+    }
+
+    for(i = 0; i < totalDiskNum; i++) {
+        disks[i] = diskArray[subRAIDId][i];
+        offsets[i] = offsetArray[subRAIDId][i];
+    }
+
+    if(subRAIDAddr + reqBlockNum <= (ainfo->blocks_partition * dataDiskNum)) {
+        if (ainfo->method != 2)
+            sub_raid_request(tip, subRAIDAddr, disks, offsets, reqSize, op);   
+        else
+            rs_request(tip, subRAIDAddr, disks, offsets, reqSize, op);   
+    } else {
+        int reqSizeFirst, reqSizeLast;
+        reqSizeFirst = ((ainfo->blocks_partition * dataDiskNum) - subRAIDAddr) * BLOCK;
+        if (ainfo->method != 2)
+            sub_raid_request(tip, subRAIDAddr, disks, offsets, reqSizeFirst, op);
+        else
+            rs_request(tip, subRAIDAddr, disks, offsets, reqSizeFirst, op);
+        
+        reqSizeLast = (subRAIDAddr + reqBlockNum - (ainfo->blocks_partition * dataDiskNum)) * BLOCK;
+        if (ainfo->method != 2)
+            sub_raid_request(tip, 0, disks, offsets, reqSizeLast, op); 
+        else
+            rs_request(tip, 0, disks, offsets, reqSizeLast, op); 
+    }
+}
+
+
 inline int is_finish(struct addr_info *ainfo, long long start_time) {
     start_time = gettime() - start_time;
 
@@ -707,7 +988,7 @@ inline int is_finish(struct addr_info *ainfo, long long start_time) {
 
 //g=k
 // 21个磁盘，部署7组传统2+1 RAID5，假定每个磁盘6个PARTITION
-void raid5_online(struct thr_info *tip) {
+void online(struct thr_info *tip) {
     struct addr_info *ainfo = tip->ainfo;
 
     int hostName, logicAddr, size;
@@ -719,7 +1000,7 @@ void raid5_online(struct thr_info *tip) {
     int req_count = 0;
 
     while (!is_finish(ainfo, last_time)) {
-        if ((req_count + 1) % 101 == 0)
+        if ((req_count + 1) % 2001 == 0)
             fprintf(stderr, "has process %d request\n", req_count);
 
         int retCode;
@@ -739,88 +1020,27 @@ void raid5_online(struct thr_info *tip) {
         }
 
         logicAddr = (logicAddr / 8) % ainfo->capacity_total;
-        raid5_3time7disks_request(tip, logicAddr, size, op);
-        req_count++;
-    }
-
-    fclose(f);
-}
-
-//oi-raid单盘修复
-void oi_raid_online(struct thr_info *tip) {
-    struct addr_info *ainfo = tip->ainfo;
-
-    int hostName, logicAddr, size;
-    char op;
-    double timeStamp;
-
-    FILE *f = fopen(ainfo->trace_fn, "r");
-    long long last_time = gettime();
-    int req_count = 0;
-
-    while (!is_finish(ainfo, last_time)) {
-        if ((req_count + 1) % 101 == 0)
-            fprintf(stderr, "has process %d request\n", req_count);
-
-        int retCode;
-        retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);
-
-        //while (retCode == 5){
-        //  retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);;
-        //}
-        if (retCode != 5)
-            break;
-
-        long long cur_time = gettime();
-        long long time_diff = (long long) (timeStamp * 1000 * 1000 * 1000) - (cur_time - last_time);
-
-        if (time_diff > 1000) {
-            usleep(time_diff / 1000);
+        region_request(tip, logicAddr, size, op);
+/*        switch (ainfo->method) {
+            case 0:
+                raid5_3time7disks_request(tip, logicAddr, size, op);
+                break;
+            case 1:
+                region_request(tip, logicAddr, size, op);
+                break;
+            case 2:
+                rs_request(tip, logicAddr, size, op);
+                break;
+            case 3:
+                break;
+            case 4:
+                region_request(tip, logicAddr, size, op);
+                break;
         }
-
-        logicAddr = (logicAddr / 8) % ainfo->capacity_total;
-        oi_raid_request(tip, logicAddr, size, op);
+*/
         req_count++;
     }
 
     fclose(f);
 }
 
-void rs_online(struct thr_info *tip) {
-    struct addr_info *ainfo = tip->ainfo;
-
-    int hostName, logicAddr, size;
-    char op;
-    double timeStamp;
-
-    FILE *f = fopen(ainfo->trace_fn, "r");
-    long long last_time = gettime();
-    int req_count = 0;
-
-    while (!is_finish(ainfo, last_time)) {
-        if ((req_count + 1) % 101 == 0)
-            fprintf(stderr, "has process %d request\n", req_count);
-
-        int retCode;
-        retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);
-
-        //while (retCode == 5){
-        //  retCode = fscanf(f, "%d,%d,%d,%c,%lf", &hostName, &logicAddr, &size, &op, &timeStamp);;
-        //}
-        if (retCode != 5)
-            break;
-
-        long long cur_time = gettime();
-        long long time_diff = (long long) (timeStamp * 1000 * 1000 * 1000) - (cur_time - last_time);
-
-        if (time_diff > 1000) {
-            usleep(time_diff / 1000);
-        }
-
-        logicAddr = (logicAddr / 8) % ainfo->capacity_total;
-        rs_request(tip, logicAddr, size, op);
-        req_count++;
-    }
-
-    fclose(f);
-}

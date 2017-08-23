@@ -904,6 +904,7 @@ again:
         }
     }
 
+    pthread_mutex_lock(&tip->mutex);
     for (i = 0, evp = events; i < ndone; i++, evp++) {
         struct iocb_pkt *iocbp = evp->data;
 
@@ -954,14 +955,13 @@ again:
             hash_add(tip->ht, start_time, left - 1);
         }
 
-        pthread_mutex_lock(&tip->mutex);
+    //    pthread_mutex_lock(&tip->mutex);
         list_move_tail(&iocbp->head, &tip->free_iocbs);
         tip->naios_free++;
         tip->naios_out--;
-        pthread_mutex_unlock(&tip->mutex);
+    //    pthread_mutex_unlock(&tip->mutex);
     }
 
-    pthread_mutex_lock(&tip->mutex);
     // tip->naios_free += ndone;
     // tip->naios_out -= ndone;
     naios_out = minl(naios_out, tip->naios_out);
@@ -1120,12 +1120,12 @@ static void *replay_sub(void *arg) {
     record_index = 0;
     wait_iter_start();
 
-    if (tip->ainfo->method == 0)
-        raid5_online(tip);
-    else if (tip->ainfo->method == 1)
-        oi_raid_online(tip);
-    else if (tip->ainfo->method == 2)
-        rs_online(tip);
+    if (tip->ainfo->method <= 4)
+        online(tip);
+    else {
+        fprintf(stderr, "error method %d\n", tip->ainfo->method);
+        exit(1);
+    }
 
     pthread_mutex_lock(&tip->mutex);
     tip->iter_send_done = 1;
@@ -1180,7 +1180,7 @@ static void handle_args(struct thr_info *tip, int argc, char *argv[]) {
     ainfo->n = 6;
     ainfo->m = 3;
 
-    ainfo->failedDisk = 9;
+    ainfo->failedDisk = 1;
 
     ainfo->strip_size = atoi(argv[5]);  //KB
 
@@ -1263,7 +1263,7 @@ int main(int argc, char *argv[]) {
 
     long long clock_diff = gettime() - start_time;
 
-    FILE *f = fopen("running-time.txt", "a+");
+    FILE *f = fopen("running-time-request.txt", "a+");
     fprintf(f, "%lld.%09lld\n", du64_to_sec(clock_diff), du64_to_nsec(clock_diff));
     fclose(f);
 

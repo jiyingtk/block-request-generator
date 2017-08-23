@@ -40,6 +40,13 @@
 /dev/sdbn
 /dev/sdbo
 /dev/sdbp
+/dev/sdbq
+/dev/sdbr
+/dev/sdbs
+/dev/sdbt
+/dev/sdbu
+/dev/sdbv
+/dev/sdbw
 /dev/sdm
 /dev/sdn
 /dev/sdo
